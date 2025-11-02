@@ -1,6 +1,5 @@
 from datasets import load_dataset
 from collections import defaultdict
-from unidecode import unidecode
 import random
 from itertools import chain
 import torch
@@ -9,6 +8,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import os
+from aksharamukha import transliterate
 
 def cprint(text, color="w"):
     """
@@ -45,7 +45,7 @@ def clean_word(inpword):
     inpword = inpword.lower()
     # Keep only alphabetic chars
     inpword = ''.join(c for c in inpword if c.isalpha())
-    text = unidecode(inpword)
+    text = transliterate.process('autodetect', 'latn-iast', inpword, param="script_code")
     return text
 
 
@@ -83,14 +83,15 @@ train, model_path = choose_model()
 
 # === Choose which languages to include ===
 selected_langs = {
-    "hau",
-    "amh",
-    "yor",
-    "orm",
-    "ibo",
-    "zul",
-    "sna",
+    "eng",
+    "fra",
+    "spa",
+    "hin",
+    "ind",
+    "por",
+    "ben",
     "arb",
+    "rus",
 }
 
 y_test, X_test = None, None
