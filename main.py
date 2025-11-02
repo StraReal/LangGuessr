@@ -1,0 +1,249 @@
+from datasets import load_dataset
+from collections import defaultdict
+from unidecode import unidecode
+import random
+from itertools import chain
+import torch
+from sklearn.model_selection import train_test_split
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+
+def cprint(text, color="w"):
+    """
+    :param text: text to print
+    :param color: color to print in (red, green, yellow, blue, magenta, cyan, white)
+    :return: None
+    """
+    colors = {
+        "r": "\033[91m",
+        "g": "\033[92m",
+        "y": "\033[93m",
+        "b": "\033[94m",
+        "m": "\033[95m",
+        "c": "\033[96m",
+        "w": "\033[97m",
+    }
+    RESET = "\033[0m"
+    print(f"{colors.get(color, colors['w'])}{text}{RESET}")
+
+# === 1. Load the PanLex dataset ===
+dataset = load_dataset("lbourdois/panlex")["train"]
+
+# === 2. Choose which languages to include ===
+selected_langs = {
+    "deu",  # German
+    "cmn",  # Mandarin Chinese
+    "rus",  # Russian
+    "ita",  # Italian
+    "spa",  # Spanish
+    "eng",  # English
+    "fra",  # French
+    "jpn",  # Japanese
+}
+
+# === 3. Initialize data containers ===
+previous_lang = None
+disc_langs=0
+max_per_lang = 10000  # how many samples to collect per language
+lang_words = defaultdict(list)
+lang_counts = defaultdict(int)
+
+# === 4. Stream through the dataset efficiently ===
+for entry in dataset:
+    lang = entry["639-3"]
+    word = entry["vocab"]
+
+    if lang != previous_lang:
+        cprint(f"→ New language block: {lang}, previous language: {previous_lang}", color="y" if lang in selected_langs else "g" if previous_lang in selected_langs else "w")
+        if previous_lang in selected_langs:
+            disc_langs+=1
+            if disc_langs==len(selected_langs):
+                break
+        previous_lang = lang
+
+    # Skip if not one of your chosen languages
+    if lang not in selected_langs:
+        continue
+
+    # Skip empty or weird entries
+    if not word or len(word.strip()) == 0:
+        continue
+
+    # Skip words with any uppercase letters
+    if any(c.isupper() for c in word):
+        continue
+
+    # Remove numbers/punctuation
+    word_clean = ''.join(c for c in word if c.isalpha())
+
+    # Transliterate to Latin script
+    word_clean = unidecode(word_clean)
+
+    # Skip if empty after cleaning
+    if not word_clean:
+        continue
+
+    # Lowercase everything and remove spaces
+    word_clean = word_clean.lower().replace(" ", "")
+
+    lang_words[lang].append(word_clean.strip())
+    lang_counts[lang] += 1
+
+    if len(word_clean) < 3:
+        continue
+for lang in lang_words:
+    if len(lang_words[lang]) > max_per_lang:
+        lang_words[lang] = random.sample(lang_words[lang], max_per_lang)
+
+# === 5. Print summary ===
+print("\nCollected samples per language:")
+for lang in selected_langs:
+    print(f"{lang}: {len(lang_words[lang])}")
+
+# === 6. Flatten everything into a single list for training ===
+all_samples = [
+    {"vocab": word, "lang": lang}
+    for lang, words in lang_words.items()
+    for word in words
+]
+
+# Shuffle to mix languages
+random.shuffle(all_samples)
+
+total_samples = len(all_samples)
+print(f"\nTotal collected samples: {total_samples}")
+
+entries = []
+for i in range(20):
+    entries.append(random.randint(0,total_samples))
+entries.sort()
+
+# === 7. Optional: separate inputs and labels ===
+words = [entry["vocab"] for entry in all_samples]
+langs = [entry["lang"] for entry in all_samples]
+
+for ent in entries:
+    print(f"Example: {words[ent]} -> {langs[ent]}")
+
+
+# Collect all unique characters
+all_chars = sorted(set(chain.from_iterable(words)))
+char2idx = {c: i+1 for i, c in enumerate(all_chars)}  # +1 to reserve 0 for padding
+idx2char = {i: c for c, i in char2idx.items()}
+
+vocab_size = len(char2idx) + 1  # +1 for padding
+print(f"Vocabulary size: {vocab_size}")
+
+max_len = 40
+
+def encode_word(word):
+    # Convert each character to index, truncate if needed
+    word_idx = [char2idx.get(c, 0) for c in word[:max_len]]
+    # Pad with zeros if shorter
+    word_idx += [0] * (max_len - len(word_idx))
+    return word_idx
+
+X = [encode_word(word) for word in words]
+
+lang2idx = {lang: i for i, lang in enumerate(selected_langs)}
+y = [lang2idx[lang] for lang in langs]
+
+X = torch.tensor(X, dtype=torch.long)
+y = torch.tensor(y, dtype=torch.long)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+class CharCNN(nn.Module):
+    def __init__(self, vocab_size, embed_dim, num_classes, max_len):
+        super().__init__()
+        self.embedding = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
+        self.conv1 = nn.Conv1d(embed_dim, 128, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(128, 128, kernel_size=3, padding=1)
+        self.pool = nn.AdaptiveMaxPool1d(1)
+        self.fc = nn.Linear(128, num_classes)
+
+    def forward(self, x):
+        x = self.embedding(x)  # [batch, seq_len, embed_dim]
+        x = x.permute(0, 2, 1)  # [batch, embed_dim, seq_len] for Conv1d
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = self.pool(x).squeeze(-1)  # global max pooling
+        x = self.fc(x)
+        return x
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+model = CharCNN(vocab_size=vocab_size, embed_dim=32, num_classes=len(selected_langs), max_len=max_len).to(device)
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+batch_size = 64
+epochs = 10
+
+train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
+train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+for epoch in range(epochs):
+    model.train()
+    total_loss = 0
+    for xb, yb in train_loader:
+        xb, yb = xb.to(device), yb.to(device)
+        optimizer.zero_grad()
+        preds = model(xb)
+        loss = criterion(preds, yb)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+    print(f"Epoch {epoch+1}: Loss = {total_loss/len(train_loader):.4f}")
+
+model.eval()
+with torch.no_grad():
+    X_test, y_test = X_test.to(device), y_test.to(device)
+    preds = model(X_test)
+    acc = (preds.argmax(1) == y_test).float().mean()
+    print(f"Test accuracy: {acc:.4f}")
+
+model_path = f"models/{input("Insert model name: ")}.pth"
+
+torch.save({
+    'model_state_dict': model.state_dict(),
+    'char2idx': char2idx,
+    'idx2char': idx2char,
+    'lang2idx': lang2idx,
+    'idx2lang': {i: l for l, i in lang2idx.items()},
+    'max_len': max_len
+}, model_path)
+
+print(f"✅ Model saved to {model_path}")
+
+import torch
+import torch.nn.functional as F
+from unidecode import unidecode
+
+def clean_and_encode(inpword):
+    inpword = inpword.lower()
+    inpword = ''.join(c for c in inpword if c.isalpha())
+    inpword = unidecode(inpword)
+    word_idx = [char2idx.get(c, 0) for c in inpword[:max_len]]
+    word_idx += [0] * (max_len - len(word_idx))
+    return torch.tensor([word_idx], dtype=torch.long)
+
+def predict_top2_prob(inpword, model, idx2lang):
+    model.eval()
+    with torch.no_grad():
+        x = clean_and_encode(inpword)
+        x = x.to(next(model.parameters()).device)
+        logits = model(x).squeeze(0)
+        probs = F.softmax(logits, dim=0)  # convert to probabilities
+        top2_probs, top2_indices = torch.topk(probs, 2)
+        results = [(idx2lang[idx.item()], top2_probs[i].item()*100) for i, idx in enumerate(top2_indices)]
+        return results
+
+# Interactive loop
+while True:
+    input_word = input("Enter a word: ")
+    top2 = predict_top2_prob(input_word, model, {i: l for l, i in lang2idx.items()})
+    print(f"{input_word} -> {top2[0][0]} ({top2[0][1]:.1f}%), {top2[1][0]} ({top2[1][1]:.1f}%)")
