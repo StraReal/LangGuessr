@@ -58,11 +58,9 @@ def encode_word(word):
     # Pad with zeros if shorter
     word_idx += [0] * (max_len - len(word_idx))
     return word_idx
-
 def clean_word(inpword: str) -> str:
     """Lowercase, transliterate, and remove non-alpha characters."""
-    inpword = smart_transliterate(inpword.lower())
-    return ''.join(c for c in inpword if c.isalpha())
+    return smart_transliterate(inpword.lower())
 
 
 
