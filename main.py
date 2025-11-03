@@ -1,3 +1,4 @@
+from aksharamukha import transliterate
 from datasets import load_dataset
 from collections import defaultdict
 import random
@@ -8,8 +9,13 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 import os
-from aksharamukha import transliterate
+from unidecode import unidecode
 
+def smart_transliterate(text):
+    n_text = transliterate.process('autodetect', 'iast', text)
+    if n_text == text:
+        n_text = unidecode(text)
+    return n_text
 def cprint(text, color="w"):
     """
     :param text: text to print
@@ -37,47 +43,33 @@ def encode_word(word):
     # Pad with zeros if shorter
     word_idx += [0] * (max_len - len(word_idx))
     return word_idx
-def clean_word(inpword):
-    """
-    Lowercase, remove non-alpha chars, transliterate to Latin automatically
-    based on detected language.
-    """
-    inpword = inpword.lower()
-    # Keep only alphabetic chars
-    inpword = ''.join(c for c in inpword if c.isalpha())
-    text = transliterate.process('autodetect', 'latn-iast', inpword, param="script_code")
-    return text
+
+def clean_word(inpword: str) -> str:
+    """Lowercase, transliterate, and remove non-alpha characters."""
+    inpword = smart_transliterate(inpword).lower()
+    return ''.join(c for c in inpword if c.isalpha())
+
 
 
 def choose_model(folder="models"):
-    # Ensure the folder exists
     os.makedirs(folder, exist_ok=True)
+    files = sorted([f for f in os.listdir(folder) if f.endswith(".pth")])
 
-    # List .pth files
-    files = [f for f in os.listdir(folder) if f.endswith(".pth")]
-    files.sort()
+    cprint("Options:", "c")
+    cprint("0) Train new model", "g")
+    for i, f in enumerate(files, 1):
+        cprint(f"{i}) {f}", "y")
 
-    # Display menu
-    cprint("Options:", 'c')
-    cprint("0) Train new model", 'g')
-    for i, f in enumerate(files, start=1):
-        cprint(f"{i}) {f}", 'y')
-
-    # Ask for user choice
     while True:
         try:
-            choice = int(input("Enter the number of your choice: "))
+            choice = int(input("Enter your choice: "))
             if 0 <= choice <= len(files):
                 break
-            else:
-                cprint(f"Please enter a number between 0 and {len(files)}", 'r')
+            cprint(f"Please enter a number between 0 and {len(files)}", "r")
         except ValueError:
-            cprint("Invalid input, enter a number.", 'r')
+            cprint("Invalid input, enter a number.", "r")
 
-    if choice == 0:
-        return True, None  # Train new model
-    else:
-        return False, os.path.join(folder, files[choice - 1])  # Load existing model
+    return (True, None) if choice == 0 else (False, os.path.join(folder, files[choice - 1]))
 
 train, model_path = choose_model()
 
@@ -92,6 +84,7 @@ selected_langs = {
     "ben",
     "arb",
     "rus",
+    "cmn",
 }
 
 y_test, X_test = None, None
@@ -102,6 +95,7 @@ if train:
     # === 2. Initialize data containers ===
     previous_lang = None
     disc_langs = 0
+    count=0
     max_per_lang = 10000  # how many samples to collect per language
     lang_words = defaultdict(list)
     lang_counts = defaultdict(int)
@@ -137,11 +131,11 @@ if train:
         if not word_clean:
             continue
 
-        lang_words[lang].append(word_clean.strip())
-        lang_counts[lang] += 1
-
         if len(word_clean) < 3:
             continue
+
+        lang_words[lang].append(word_clean.strip())
+        lang_counts[lang] += 1
     for lang in lang_words:
         if len(lang_words[lang]) > max_per_lang:
             lang_words[lang] = random.sample(lang_words[lang], max_per_lang)
