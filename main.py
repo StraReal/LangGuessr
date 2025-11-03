@@ -11,6 +11,11 @@ import torch.nn.functional as F
 import os
 from unidecode import unidecode
 import csv
+import regex
+
+def is_latin(word):
+    letters = regex.findall(r'\p{L}', word)
+    return all(regex.match(r'\p{Latin}', ch) for ch in letters)
 
 def load_index_csv(path="indexing.csv"):
     blocks = {}
@@ -21,10 +26,11 @@ def load_index_csv(path="indexing.csv"):
             blocks[lang] = (int(row["start"]), int(row["end"])-1)
     return blocks
 def smart_transliterate(text):
-    n_text = transliterate.process('autodetect', 'iast', text)
-    if n_text == text:
-        n_text = unidecode(text)
-    return n_text
+    # Only transliterate if the text is not Latin
+    if not is_latin(text):
+        return unidecode(transliterate.process('autodetect', 'latn', text, param="script_code"))
+    else:
+        return unidecode(text)
 def cprint(text, color="w"):
     """
     :param text: text to print
@@ -55,7 +61,7 @@ def encode_word(word):
 
 def clean_word(inpword: str) -> str:
     """Lowercase, transliterate, and remove non-alpha characters."""
-    inpword = smart_transliterate(inpword).lower()
+    inpword = smart_transliterate(inpword.lower())
     return ''.join(c for c in inpword if c.isalpha())
 
 
