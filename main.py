@@ -10,7 +10,16 @@ import torch.optim as optim
 import torch.nn.functional as F
 import os
 from unidecode import unidecode
+import csv
 
+def load_index_csv(path="indexing.csv"):
+    blocks = {}
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            lang = row["lang"]
+            blocks[lang] = (int(row["start"]), int(row["end"])-1)
+    return blocks
 def smart_transliterate(text):
     n_text = transliterate.process('autodetect', 'iast', text)
     if n_text == text:
@@ -74,7 +83,7 @@ def choose_model(folder="models"):
 train, model_path = choose_model()
 
 # === Choose which languages to include ===
-selected_langs = {
+selected_langs = [
     "eng",
     "fra",
     "spa",
@@ -85,13 +94,14 @@ selected_langs = {
     "arb",
     "rus",
     "cmn",
-}
+]
 
 y_test, X_test = None, None
 
 if train:
     # === 1. Load the PanLex dataset ===
     dataset = load_dataset("lbourdois/panlex")["train"]
+    index_blocks = load_index_csv("indexing.csv")
     # === 2. Initialize data containers ===
     previous_lang = None
     disc_langs = 0
@@ -99,43 +109,27 @@ if train:
     max_per_lang = 10000  # how many samples to collect per language
     lang_words = defaultdict(list)
     lang_counts = defaultdict(int)
-    # === 3. Stream through the dataset efficiently ===
-    for entry in dataset:
-        lang = entry["639-3"]
-        word = entry["vocab"]
+    # === 3. Stream through the dataset ===
+    for lang in selected_langs:
+        start, end = index_blocks[lang]
+        print(f"Processing {lang} [{start}:{end}] ({end - start} entries)")
+        subset = dataset.select(range(start, end))
+        n = len(subset)
+        while lang_counts[lang] < 10000:
+            idx = random.randint(0, n - 1)  # random index in subset
+            entry = subset[idx]
+            word = (entry['vocab'] or "").strip()
 
-        if lang != previous_lang:
-            cprint(f"→ New language block: {lang}, previous language: {previous_lang}", color="y" if lang in selected_langs else "g" if previous_lang in selected_langs else "w")
-            if previous_lang in selected_langs:
-                disc_langs+=1
-                if disc_langs==len(selected_langs):
-                    break
-            previous_lang = lang
+            if len(word) < 3 or not word.islower():
+                continue
 
-        # Skip if not one of your chosen languages
-        if lang not in selected_langs:
-            continue
+            word_clean = clean_word(word)
+            if not word_clean or len(word_clean) < 3:
+                continue
 
-        # Skip empty or weird entries
-        if not word or len(word.strip()) == 0:
-            continue
+            lang_words[lang].append(word_clean)
+            lang_counts[lang] += 1
 
-        # Skip words with any uppercase letters
-        if any(c.isupper() for c in word):
-            continue
-
-        # Clean word
-        word_clean = clean_word(word)
-
-        # Skip if empty after cleaning
-        if not word_clean:
-            continue
-
-        if len(word_clean) < 3:
-            continue
-
-        lang_words[lang].append(word_clean.strip())
-        lang_counts[lang] += 1
     for lang in lang_words:
         if len(lang_words[lang]) > max_per_lang:
             lang_words[lang] = random.sample(lang_words[lang], max_per_lang)
