@@ -21,7 +21,6 @@ def find_language_blocks(dataset, key="639-3"):
     blocks[current_lang] = (start, len(dataset))
     return blocks
 
-
 def save_index_to_csv(blocks, path="indexing.csv"):
     """Save {lang: (start, end)} to a CSV file."""
     with open(path, "w", newline="", encoding="utf-8") as f:

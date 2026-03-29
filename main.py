@@ -25,6 +25,7 @@ def load_index_csv(path="indexing.csv"):
             lang = row["lang"]
             blocks[lang] = (int(row["start"]), int(row["end"])-1)
     return blocks
+
 def smart_transliterate(text):
     # Only transliterate if the text is not Latin
     if not is_latin(text):
@@ -61,8 +62,6 @@ def encode_word(word):
 def clean_word(inpword: str) -> str:
     """Lowercase, transliterate, and remove non-alpha characters."""
     return smart_transliterate(inpword.lower())
-
-
 
 def choose_model(folder="models"):
     os.makedirs(folder, exist_ok=True)
@@ -103,24 +102,25 @@ selected_langs = [
 y_test, X_test = None, None
 
 if train:
-    # === 1. Load the PanLex dataset ===
     dataset = load_dataset("lbourdois/panlex")["train"]
     index_blocks = load_index_csv("indexing.csv")
-    # === 2. Initialize data containers ===
     previous_lang = None
     disc_langs = 0
     count=0
-    max_per_lang = 10000  # how many samples to collect per language
+    max_per_lang = 20000  # how many samples to collect per language
     lang_words = defaultdict(list)
     lang_counts = defaultdict(int)
-    # === 3. Stream through the dataset ===
+    print(f"Training on {max_per_lang} entries per language.")
     for lang in selected_langs:
         start, end = index_blocks[lang]
-        print(f"Processing {lang} [{start}:{end}] ({end - start} entries)")
+        if end-start>=max_per_lang:
+            print(f"Processing {lang} [{start}:{end}] ({end - start} entries)")
+        else:
+            cprint(f"Processing {lang} [{start}:{end}] ({end - start} entries)", 'r')
         subset = dataset.select(range(start, end))
         n = len(subset)
         while lang_counts[lang] < 10000:
-            idx = random.randint(0, n - 1)  # random index in subset
+            idx = random.randint(0, n - 1)
             entry = subset[idx]
             word = (entry['vocab'] or "").strip()
 
@@ -133,23 +133,21 @@ if train:
 
             lang_words[lang].append(word_clean)
             lang_counts[lang] += 1
+            n = len(subset)
 
     for lang in lang_words:
         if len(lang_words[lang]) > max_per_lang:
             lang_words[lang] = random.sample(lang_words[lang], max_per_lang)
 
-    # === 4. Print summary ===
     print("\nCollected samples per language:")
     for lang in selected_langs:
         print(f"{lang}: {len(lang_words[lang])}")
 
-    # === 5. Flatten everything into a single list for training ===
     all_samples = [
         {"vocab": word, "lang": lang}
         for lang, words in lang_words.items()
         for word in words
     ]
-    # Shuffle to mix languages
     random.shuffle(all_samples)
     total_samples = len(all_samples)
     print(f"\nTotal collected samples: {total_samples}")
@@ -157,15 +155,13 @@ if train:
     for i in range(20):
         entries.append(random.randint(0,total_samples))
     entries.sort()
-    # === 7. Separate inputs and labels ===
     words = [entry["vocab"] for entry in all_samples]
     langs = [entry["lang"] for entry in all_samples]
     for ent in entries:
         print(f"Example: {words[ent]} -> {langs[ent]}")
 
-    # Collect all unique characters
     all_chars = sorted(set(chain.from_iterable(words)))
-    char2idx = {c: i+1 for i, c in enumerate(all_chars)}  # +1 to reserve 0 for padding
+    char2idx = {c: i+1 for i, c in enumerate(all_chars)}
     idx2char = {i: c for c, i in char2idx.items()}
     vocab_size = len(char2idx) + 1  # +1 for padding
     print(f"Vocabulary size: {vocab_size}")
@@ -209,7 +205,7 @@ if train:
     optimizer = optim.Adam(model.parameters(), lr=0.001)
 
     batch_size = 64
-    epochs = 10
+    epochs = 20
 
     train_dataset = torch.utils.data.TensorDataset(X_train, y_train)
     train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
